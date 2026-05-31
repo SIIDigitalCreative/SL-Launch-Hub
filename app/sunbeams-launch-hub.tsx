@@ -120,7 +120,8 @@ function inferProduct(p, brandInfo) {
     p.inclusions  ? `includes ${p.inclusions}`                  : "",
     p.warranty    ? `backed by a ${p.warrantyDuration||""} ${p.warranty}`.trim() : "",
   ].filter(Boolean);
-  return { keyBenefit, targetCustomer, details, keyBenefit, targetCustomer };
+  return { keyBenefit, targetCustomer, details };
+
 }
 
 // ── Image prompt builder ───────────────────────────────────────────────────────
