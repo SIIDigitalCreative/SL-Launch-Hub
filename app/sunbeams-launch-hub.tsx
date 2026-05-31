@@ -1,3 +1,4 @@
+"use client";
 import { useState, useRef } from "react";
 
 // ── Brand UI tokens (Sunbeams Lifestyle app chrome only) ──────────────────────
