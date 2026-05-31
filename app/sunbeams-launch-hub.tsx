@@ -567,7 +567,7 @@ export default function LaunchHub(){
   const removeProduct = id => setProducts(ps=>ps.filter(p=>p.id!==id));
 
   const validate=()=>{
-    const e={};
+    const e: Record<string, string>={};
     if(!brandInfo.brandName.trim()) e.brandName="Required";
     if(!brandInfo.launchDate)       e.launchDate="Required";
     if(products.some(p=>!p.productName.trim())) e.products="Each product needs a name";
