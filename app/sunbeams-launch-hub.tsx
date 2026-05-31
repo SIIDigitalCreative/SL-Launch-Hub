@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ── Brand UI tokens (Sunbeams Lifestyle app chrome only) ──────────────────────
 const B = {
@@ -26,6 +26,51 @@ const EMPTY_PRODUCT = () => ({
   shape:"", dimensions:"", inclusions:"", warranty:"", warrantyDuration:"",
   pricePoint:"", specialOffer:"",
 });
+
+// ── API base — auto-detects deployed Vercel URL or localhost ─────────────────
+const API_BASE = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+
+// ── KV API helpers ────────────────────────────────────────────────────────────
+async function loadBrandsFromStorage() {
+  try {
+    const r = await fetch(`${API_BASE}/api/progress?type=brands`);
+    if (!r.ok) throw new Error("api error");
+    const d = await r.json();
+    return Array.isArray(d.brands) ? d.brands : [];
+  } catch {
+    // Fallback: window.storage for offline / dev
+    try { const r = await window.storage.get("sunbeams-brands"); return r ? JSON.parse(r.value) : []; }
+    catch { return []; }
+  }
+}
+
+async function saveBrandsToKV(brands) {
+  try {
+    const r = await fetch(`${API_BASE}/api/progress`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ type:"brands", data: brands }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function loadProgressFromKV(sessionId) {
+  try {
+    const r = await fetch(`${API_BASE}/api/progress?type=progress&session=${encodeURIComponent(sessionId)}`);
+    if (!r.ok) throw new Error("api error");
+    const d = await r.json();
+    return d.progress || {};
+  } catch { return {}; }
+}
+
+async function saveProgressToKV(sessionId, taskState) {
+  try {
+    await fetch(`${API_BASE}/api/progress`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ type:"progress", session: sessionId, data: taskState }),
+    });
+  } catch {}
+}
 
 // ── Demo presets for auto-fill ────────────────────────────────────────────────
 const DEMO_PRESETS = [
@@ -533,7 +578,54 @@ export default function LaunchHub(){
   const [imgTab,setImgTab]         = useState("mockup");
   const [imgPrompts,setImgPrompts] = useState({});
   const [imgLoading,setImgLoading] = useState(false);
+
+  // ── Brand Manager state ────────────────────────────────────────────────
+  const [bmView,setBmView]         = useState("list");   // list | detail | edit | new
+  const [bmActive,setBmActive]     = useState(null);
+  const [bmEdit,setBmEdit]         = useState(null);
+  const [bmSaving,setBmSaving]     = useState(false);
+  const [bmDelConfirm,setBmDel]    = useState(null);
   const [showPresets,setShowPresets] = useState(false);
+  const [savedBrands,setSavedBrands] = useState([]);
+  const [selectedBrandId,setSelectedBrandId] = useState("");
+  const [brandsLoaded,setBrandsLoaded] = useState(false);
+  const [syncStatus,setSyncStatus] = useState(""); // "saving" | "saved" | "error" | ""
+  // Stable session ID — persists across page reloads for same launch
+  const [sessionId] = useState(() => {
+    try {
+      let s = localStorage.getItem("sunbeams-session");
+      if (!s) { s = `session-${Date.now()}-${Math.random().toString(36).slice(2,8)}`; localStorage.setItem("sunbeams-session",s); }
+      return s;
+    } catch { return `session-${Date.now()}`; }
+  });
+
+  // Load brands on mount
+  useEffect(() => {
+    loadBrandsFromStorage().then(brands => {
+      if (brands && brands.length > 0) setSavedBrands(brands);
+      else { setSavedBrands(DEFAULT_BRANDS); saveBrandsToKV(DEFAULT_BRANDS); }
+      setBrandsLoaded(true);
+    });
+  }, []);
+
+  // Load shared task progress when results are shown
+  useEffect(() => {
+    if (step !== "results") return;
+    loadProgressFromKV(sessionId).then(saved => {
+      if (saved && Object.keys(saved).length > 0) setTaskState(saved);
+    });
+  }, [step]);
+
+  // Auto-poll for progress updates every 30s when in results view
+  useEffect(() => {
+    if (step !== "results") return;
+    const interval = setInterval(() => {
+      loadProgressFromKV(sessionId).then(saved => {
+        if (saved && Object.keys(saved).length > 0) setTaskState(saved);
+      });
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [step]);
 
   const [brandInfo,setBrandInfo] = useState({
     brandName:"Sunbeams Lifestyle", collectionName:"",
@@ -549,8 +641,82 @@ export default function LaunchHub(){
     setShowPresets(false);
   };
 
+  const selectBrand = (id) => {
+    setSelectedBrandId(id);
+    const found = savedBrands.find(b => b.id === id);
+    if (!found) return;
+    const colorStr = (found.colors||[]).map(c=>`${c.hex}${c.name?" ("+c.name+")":""}`).join(", ");
+    const typoStr  = (found.typography||[]).map(t=>t.name).join(", ");
+    setBrandInfo(prev => ({
+      ...prev,
+      brandName:           found.name           || prev.brandName,
+      brandColors:         colorStr             || prev.brandColors,
+      brandTypeface:       typoStr              || prev.brandTypeface,
+      packagingDimensions: found.packagingDimensions || prev.packagingDimensions,
+      logoUrl:             found.logoUrl        || prev.logoUrl,
+      platforms:           found.platforms?.length ? found.platforms : prev.platforms,
+    }));
+  };
+
   const setBrand    = (k,v) => setBrandInfo(b=>({...b,[k]:v}));
   const togglePlat  = p => setBrandInfo(b=>({...b,platforms:b.platforms.includes(p)?b.platforms.filter(x=>x!==p):[...b.platforms,p]}));
+  // ── Brand Manager helpers ────────────────────────────────────────────────
+  const bmOpenDetail = b  => { setBmActive(b); setBmView("detail"); };
+  const bmOpenEdit   = b  => { setBmEdit(JSON.parse(JSON.stringify(b))); setBmView("edit"); };
+  const bmOpenNew    = () => {
+    setBmEdit({
+      id:`brand-${Date.now()}`, name:"", tagline:"", logoUrl:"", logoText:"",
+      colors:[
+        {name:"",hex:"#CB0033",role:"Primary"},
+        {name:"",hex:"#A47860",role:"Secondary"},
+        {name:"",hex:"#D6D2C4",role:"Accent"},
+        {name:"",hex:"#F4F0EC",role:"White / Background"},
+      ],
+      typography:[
+        {name:"",role:"Display / Headlines",weights:"",style:"Serif"},
+        {name:"",role:"Body / UI",weights:"",style:"Sans-serif"},
+      ],
+      brandVoice:"", platforms:["Lazada","Shopee","TikTok Shop","Shopify"],
+    });
+    setBmView("new");
+  };
+
+  const bmPersist = async updated => {
+    setBmSaving(true);
+    await saveBrandsToKV(updated);
+    // Also save locally as fallback
+    try { await window.storage.set("sunbeams-brands", JSON.stringify(updated)); } catch {}
+    setSavedBrands(updated); setBmSaving(false);
+  };
+  const bmSave = async () => {
+    if(!bmEdit?.name?.trim()) return;
+    const updated = bmView==="new" ? [...savedBrands, bmEdit] : savedBrands.map(b=>b.id===bmEdit.id?bmEdit:b);
+    await bmPersist(updated); setBmActive(bmEdit); setBmView("detail");
+  };
+  const bmDelete  = async id => { await bmPersist(savedBrands.filter(b=>b.id!==id)); setBmDel(null); setBmView("list"); };
+  const bmSetField   = (k,v) => setBmEdit(b=>({...b,[k]:v}));
+  const bmSetColor   = (i,k,v) => setBmEdit(b=>{ const cl=[...b.colors]; cl[i]={...cl[i],[k]:v}; return {...b,colors:cl}; });
+  const bmAddColor   = () => setBmEdit(b=>({...b,colors:[...b.colors,{name:"",hex:"#888888",role:"Accent"}]}));
+  const bmRemoveColor= i => setBmEdit(b=>({...b,colors:b.colors.filter((_,x)=>x!==i)}));
+  const bmSetTypo    = (i,k,v) => setBmEdit(b=>{ const t=[...b.typography]; t[i]={...t[i],[k]:v}; return {...b,typography:t}; });
+  const bmAddTypo    = () => setBmEdit(b=>({...b,typography:[...b.typography,{name:"",role:"",weights:"",style:"Sans-serif"}]}));
+  const bmRemoveTypo = i => setBmEdit(b=>({...b,typography:b.typography.filter((_,x)=>x!==i)}));
+  const bmTogglePlat = p => setBmEdit(b=>({...b,platforms:(b.platforms||[]).includes(p)?(b.platforms||[]).filter(x=>x!==p):[...(b.platforms||[]),p]}));
+
+  const vhex = h => /^#[0-9A-Fa-f]{6}$/.test(h);
+  const textOn = hex => { try { const r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,bl=parseInt(hex.slice(5,7),16)/255; const f=v=>v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4); return 0.2126*f(r)+0.7152*f(g)+0.0722*f(bl)>0.35?"#2A1A10":"#F4F0EC"; } catch{return "#F4F0EC";} };
+
+  const LogoEl = ({brand, size=48}) => {
+    const bg = brand?.colors?.[0]?.hex || "#CB0033";
+    const fg = textOn(vhex(bg)?bg:"#CB0033");
+    if(brand?.logoUrl) return (
+      <div style={{width:size,height:size,borderRadius:6,background:"#FFF",border:"1.5px solid #E8DDD5",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+        <img src={brand.logoUrl} alt={brand.name} style={{width:"100%",height:"100%",objectFit:"contain"}} onError={e=>e.target.style.display="none"}/>
+      </div>
+    );
+    return <div style={{width:size,height:size,borderRadius:6,background:vhex(bg)?bg:"#CB0033",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Playfair Display',serif",fontSize:size*0.28,fontWeight:600,color:fg,flexShrink:0}}>{brand?.logoText||brand?.name?.slice(0,2).toUpperCase()||"SL"}</div>;
+  };
+
   const setProduct  = (id,k,v) => setProducts(ps=>ps.map(p=>p.id===id?{...p,[k]:v}:p));
   const addProduct  = () => setProducts(ps=>[...ps, EMPTY_PRODUCT()]);
   const removeProduct = id => setProducts(ps=>ps.filter(p=>p.id!==id));
@@ -582,7 +748,21 @@ export default function LaunchHub(){
     },1600);
   };
 
-  const toggleTask = key => setTaskState(s=>({...s,[key]:!s[key]}));
+  const toggleTask = key => {
+    setTaskState(s => {
+      const updated = {...s,[key]:!s[key]};
+      // Debounced KV save — fire and forget
+      clearTimeout(window._kvSaveTimer);
+      window._kvSaveTimer = setTimeout(() => {
+        setSyncStatus("saving");
+        saveProgressToKV(sessionId, updated).then(() => {
+          setSyncStatus("saved");
+          setTimeout(() => setSyncStatus(""), 2000);
+        }).catch(() => setSyncStatus("error"));
+      }, 800);
+      return updated;
+    });
+  };
   const reset = () => {
     setStep("form"); setResults({}); setErrors({});
     setTaskState({}); setImgPrompts({}); setProducts([EMPTY_PRODUCT()]); setShowPresets(false);
@@ -815,6 +995,21 @@ export default function LaunchHub(){
     .reset-btn{padding:9px 18px;border:1.5px solid #E8DDD5;background:#FFFFFF;color:#A08070;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;transition:all 0.18s;border-radius:3px;}
     .reset-btn:hover{border-color:#CB0033;color:#CB0033;}
 
+    /* ── BRAND MANAGER in sidebar ── */
+    .back-link{display:inline-flex;align-items:center;gap:7px;font-size:10px;font-weight:500;letter-spacing:0.14em;color:#A08070;text-transform:uppercase;cursor:pointer;margin-bottom:18px;border:none;background:none;padding:0;font-family:'DM Sans',sans-serif;transition:color 0.18s;}
+    .back-link:hover{color:#CB0033;}
+    .bm-sec{background:#FFF;border:1.5px solid #E8DDD5;border-radius:6px;padding:20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(42,26,16,0.03);}
+    .bm-sec-label{font-size:8px;font-weight:700;letter-spacing:0.28em;color:#CB0033;text-transform:uppercase;margin-bottom:15px;padding-bottom:9px;border-bottom:2px solid #F2D0D8;}
+    .add-row-btn{width:100%;padding:10px;border:1.5px dashed #D6C8BC;background:#FAF7F4;color:#A08070;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;cursor:pointer;transition:all 0.18s;border-radius:3px;margin-top:4px;}
+    .add-row-btn:hover{border-color:#CB0033;color:#CB0033;background:#FFF5F7;}
+    .btn-p-sm{padding:8px 16px;background:#CB0033;color:#FFF;border:none;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;cursor:pointer;transition:all 0.18s;border-radius:3px;}
+    .btn-p-sm:hover{background:#A8002A;}
+    .btn-p-sm:disabled{opacity:0.4;cursor:not-allowed;}
+    .btn-s-sm{padding:7px 14px;border:1.5px solid #E8DDD5;background:#FFF;color:#6B4A38;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;cursor:pointer;transition:all 0.18s;border-radius:3px;}
+    .btn-s-sm:hover{border-color:#A47860;color:#A47860;}
+    .btn-g-sm{padding:7px 12px;border:none;background:none;color:#A08070;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer;transition:color 0.18s;}
+    .btn-g-sm:hover{color:#2A1A10;}
+
     @media(max-width:680px){
       .fgrid{grid-template-columns:1fr;} .b2col{grid-template-columns:1fr;}
       .rsb{width:50px;} .rni-label{display:none;} .rni{justify-content:center;padding:12px;}
@@ -903,26 +1098,89 @@ export default function LaunchHub(){
           </div>
         </div>
 
+        {/* Brand Identity — linked to Brand Manager */}
         <div className="fsec">
-          <div className="fsl">Brand Identity <span className="fsl-opt">All Optional</span></div>
-          <div className="fgrid">
-            <div className="fg">
-              <label className="fl">Brand Colors</label>
-              <input className="fi" placeholder="e.g. #CB0033, #A47860, #F4F0EC" value={brandInfo.brandColors} onChange={e=>setBrand("brandColors",e.target.value)}/>
-            </div>
-            <div className="fg">
-              <label className="fl">Brand Typeface</label>
-              <input className="fi" placeholder="e.g. Playfair Display, DM Sans" value={brandInfo.brandTypeface} onChange={e=>setBrand("brandTypeface",e.target.value)}/>
-            </div>
-            <div className="fg">
-              <label className="fl">Packaging Dimensions</label>
-              <input className="fi" placeholder="e.g. 10cm × 5cm × 5cm box" value={brandInfo.packagingDimensions} onChange={e=>setBrand("packagingDimensions",e.target.value)}/>
-            </div>
-            <div className="fg">
-              <label className="fl">Logo / Brand Reference URL</label>
-              <input className="fi" placeholder="e.g. https://drive.google.com/..." value={brandInfo.logoUrl} onChange={e=>setBrand("logoUrl",e.target.value)}/>
-            </div>
+          <div className="fsl">
+            Brand Identity
+            <span className="fsl-opt">Pulled from Brand Manager</span>
           </div>
+
+          {!brandsLoaded ? (
+            <div style={{fontSize:11,color:"#A08070",padding:"12px 0"}}>Loading saved brands…</div>
+          ) : savedBrands.length > 0 ? (
+            <div>
+              {/* Brand selector grid */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10,marginBottom:16}}>
+                {savedBrands.map(b=>{
+                  const isSelected = selectedBrandId === b.id;
+                  const primaryHex = b.colors?.[0]?.hex||"#CB0033";
+                  return (
+                    <div key={b.id}
+                      onClick={()=>selectBrand(b.id)}
+                      style={{
+                        background: isSelected ? "#FFF5F7" : "#FFFFFF",
+                        border: isSelected ? "2px solid #CB0033" : "1.5px solid #E8DDD5",
+                        borderRadius:6, padding:"14px 16px", cursor:"pointer",
+                        transition:"all 0.18s",
+                        boxShadow: isSelected ? "0 4px 14px rgba(203,0,51,0.12)" : "none",
+                      }}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                        <div style={{
+                          width:36,height:36,borderRadius:4,background:primaryHex,
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          fontFamily:"'Playfair Display',serif",fontSize:13,fontWeight:600,
+                          color: primaryHex === "#F4F0EC" || primaryHex === "#D6D2C4" ? "#2A1A10" : "#F4F0EC",
+                          flexShrink:0,
+                        }}>{b.logoText||b.name?.slice(0,2).toUpperCase()||"SL"}</div>
+                        <div>
+                          <div style={{fontSize:12,fontWeight:600,color: isSelected?"#CB0033":"#2A1A10"}}>{b.name}</div>
+                          <div style={{fontSize:9,color:"#A08070",marginTop:1,lineHeight:1.3}}>{b.tagline?.split(" ").slice(0,4).join(" ")}{b.tagline?.split(" ").length>4?"…":""}</div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                        {(b.colors||[]).slice(0,5).map((cl,i)=>(
+                          <div key={i} style={{width:16,height:16,borderRadius:3,background:cl.hex,border:"1px solid rgba(0,0,0,0.08)"}} title={cl.name} />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Selected brand summary */}
+              {selectedBrandId && (()=>{
+                const sb = savedBrands.find(b=>b.id===selectedBrandId);
+                if(!sb) return null;
+                return (
+                  <div style={{background:"#FFF5F7",border:"1px solid #F2D0D8",borderLeft:"3px solid #CB0033",borderRadius:"0 4px 4px 0",padding:"14px 16px",marginBottom:4}}>
+                    <div style={{fontSize:8,letterSpacing:"0.22em",color:"#CB0033",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>Brand Identity Loaded — {sb.name}</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                      {(sb.colors||[]).map((cl,i)=>(
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:5}}>
+                          <div style={{width:20,height:20,borderRadius:3,background:cl.hex,border:"1px solid rgba(0,0,0,0.08)"}}/>
+                          <span style={{fontSize:9,color:"#6B4A38",fontFamily:"'DM Mono',monospace"}}>{cl.hex}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {sb.typography?.length > 0 && (
+                      <div style={{fontSize:11,color:"#6B4A38"}}>
+                        <strong>Typography:</strong> {sb.typography.map(t=>t.name).filter(Boolean).join(", ")||"—"}
+                      </div>
+                    )}
+
+                  </div>
+                );
+              })()}
+              <div style={{fontSize:10,color:"#C4B0A0",marginTop:8}}>
+                Don't see your brand? <button style={{fontSize:10,color:"#CB0033",background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'DM Sans',sans-serif",fontWeight:600}} onClick={()=>{if(step==="results")setActiveResult("brands");}}>Open Brand Manager ↗</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{background:"#FFF5F7",border:"1px solid #F2D0D8",borderRadius:4,padding:"16px 18px"}}>
+              <div style={{fontSize:12,color:"#6B4A38",marginBottom:6}}>No brands saved yet.</div>
+              <div style={{fontSize:11,color:"#A08070"}}>Generate a plan first, then use the <strong>Brands</strong> tab in the sidebar to add your brands.</div>
+            </div>
+          )}
         </div>
 
         <div className="fsec">
@@ -1029,6 +1287,7 @@ export default function LaunchHub(){
     {id:"copy",    icon:"▲",label:"Copy"},
     {id:"calendar",icon:"◈",label:"Calendar"},
     {id:"images",  icon:"✦",label:"Images"},
+    {id:"brands",  icon:"◉",label:"Brands"},
   ];
 
   const prog=allProg();
@@ -1234,7 +1493,223 @@ export default function LaunchHub(){
     );
   };
 
-  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,images:renderImages};
+  // ── Brand Manager render ──────────────────────────────────────────────────
+  const renderBrandManager = () => {
+    const COLOR_ROLES = ["Primary","Secondary","Accent","White / Background","Neutral","Dark"];
+    const FONT_STYLES = ["Serif","Sans-serif","Monospace","Display","Script","Slab Serif"];
+
+    if(bmView==="list") return (
+      <div key="bm-list">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <p style={{fontSize:10,letterSpacing:"0.14em",color:"#A08070",textTransform:"uppercase"}}>{savedBrands.length} Brand{savedBrands.length!==1?"s":""}</p>
+          <button className="btn-p-sm" onClick={bmOpenNew}>+ New Brand</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
+          {savedBrands.map(b=>(
+            <div key={b.id} style={{background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:6,overflow:"hidden",cursor:"pointer",transition:"all 0.2s",boxShadow:"0 2px 8px rgba(42,26,16,0.04)"}} onClick={()=>bmOpenDetail(b)}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor="#CB0033";e.currentTarget.style.transform="translateY(-2px)";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="#E8DDD5";e.currentTarget.style.transform="translateY(0)";}}>
+              <div style={{padding:"16px 16px 12px",display:"flex",alignItems:"center",gap:12}}>
+                <LogoEl brand={b} size={44}/>
+                <div><div style={{fontFamily:"'Playfair Display',serif",fontSize:15,color:"#2A1A10"}}>{b.name}</div><div style={{fontSize:10,color:"#A08070",marginTop:2,lineHeight:1.4}}>{b.tagline}</div></div>
+              </div>
+              <div style={{display:"flex",padding:"0 16px 12px",gap:5}}>
+                {(b.colors||[]).slice(0,6).map((cl,i)=><div key={i} style={{width:20,height:20,borderRadius:4,background:vhex(cl.hex)?cl.hex:"#ccc",border:"1px solid rgba(0,0,0,0.08)"}} title={`${cl.name} ${cl.hex}`}/>)}
+              </div>
+              <div style={{padding:"10px 16px",borderTop:"1px solid #F4F0EC",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#FAF7F4"}}>
+                <span style={{fontSize:9,letterSpacing:"0.1em",color:"#A08070",textTransform:"uppercase"}}>{(b.platforms||[]).slice(0,3).join(" · ")}{(b.platforms?.length||0)>3?` +${b.platforms.length-3}`:""}</span>
+                <span style={{fontSize:13,color:"#CB0033"}}>→</span>
+              </div>
+            </div>
+          ))}
+          <div style={{background:"#FAF7F4",border:"2px dashed #D6C8BC",borderRadius:6,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:9,padding:"32px 16px",cursor:"pointer",transition:"all 0.2s",minHeight:150}}
+            onClick={bmOpenNew}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#CB0033";e.currentTarget.style.background="#FFF5F7";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#D6C8BC";e.currentTarget.style.background="#FAF7F4";}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:"#FFF",border:"1.5px solid #E8DDD5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#CB0033"}}>+</div>
+            <span style={{fontSize:9,fontWeight:500,letterSpacing:"0.15em",color:"#A08070",textTransform:"uppercase"}}>Add New Brand</span>
+          </div>
+        </div>
+      </div>
+    );
+
+    if(bmView==="detail"&&bmActive) {
+      const b=bmActive;
+      return (
+        <div key="bm-detail">
+          <button className="back-link" onClick={()=>setBmView("list")}>← All Brands</button>
+          <div style={{background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:8,padding:24,marginBottom:14,display:"flex",gap:20,alignItems:"flex-start",boxShadow:"0 2px 12px rgba(42,26,16,0.05)"}}>
+            <LogoEl brand={b} size={80}/>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:400,color:"#2A1A10",lineHeight:1.1}}>{b.name}</div>
+              <div style={{fontSize:12,color:"#A08070",marginTop:5}}>{b.tagline}</div>
+              {b.brandVoice&&<div style={{fontFamily:"'Playfair Display',serif",fontSize:13,color:"#6B4A38",fontStyle:"italic",marginTop:10,lineHeight:1.6,paddingTop:10,borderTop:"1px solid #F4F0EC"}}>"{b.brandVoice}"</div>}
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+                {(b.platforms||[]).map((p,i)=><span key={i} style={{fontSize:9,letterSpacing:"0.12em",color:"#6B4A38",textTransform:"uppercase",padding:"3px 9px",background:"#F4F0EC",borderRadius:2}}>{p}</span>)}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              <button className="btn-s-sm" onClick={()=>bmOpenEdit(b)}>Edit</button>
+              <button className="icon-btn" onClick={()=>setBmDel(b.id)} title="Delete">🗑</button>
+            </div>
+          </div>
+          {/* Color strip */}
+          <div style={{display:"flex",height:7,borderRadius:4,overflow:"hidden",marginBottom:14}}>
+            {(b.colors||[]).map((cl,i)=><div key={i} style={{flex:1,background:vhex(cl.hex)?cl.hex:"#ccc"}} title={cl.name}/>)}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            {/* Color palette */}
+            <div style={{gridColumn:"1/-1",background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:6,padding:20,boxShadow:"0 2px 8px rgba(42,26,16,0.03)"}}>
+              <div style={{fontSize:8,fontWeight:700,letterSpacing:"0.26em",color:"#A08070",textTransform:"uppercase",marginBottom:14,paddingBottom:8,borderBottom:"1px solid #F4F0EC"}}>Color Palette</div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                {(b.colors||[]).map((cl,i)=>{const h=vhex(cl.hex)?cl.hex:"#888";const fg=textOn(h);return(
+                  <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
+                    <div style={{width:60,height:60,borderRadius:6,border:"1.5px solid rgba(0,0,0,0.08)",background:h,color:fg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,letterSpacing:"0.04em"}}>{cl.hex}</div>
+                    <div style={{fontSize:9,fontWeight:500,color:"#2A1A10",textAlign:"center",maxWidth:70}}>{cl.name}</div>
+                    <div style={{fontSize:8,color:"#A08070",fontFamily:"'DM Mono',monospace",textAlign:"center"}}>{cl.hex}</div>
+                    <div style={{fontSize:8,letterSpacing:"0.1em",color:"#A08070",textTransform:"uppercase",textAlign:"center"}}>{cl.role}</div>
+                  </div>
+                );})}
+              </div>
+            </div>
+            {/* Typography */}
+            <div style={{background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:6,padding:20,boxShadow:"0 2px 8px rgba(42,26,16,0.03)"}}>
+              <div style={{fontSize:8,fontWeight:700,letterSpacing:"0.26em",color:"#A08070",textTransform:"uppercase",marginBottom:14,paddingBottom:8,borderBottom:"1px solid #F4F0EC"}}>Typography</div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {(b.typography||[]).map((t,i)=>(
+                  <div key={i} style={{padding:"11px 13px",background:"#FAF7F4",borderRadius:4,border:"1px solid #E8DDD5"}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:3}}>
+                      <span style={{fontSize:17,color:"#2A1A10",fontFamily:t.name.includes("Playfair")?"'Playfair Display',serif":t.name.includes("Mono")?"'DM Mono',monospace":"'DM Sans',sans-serif"}}>{t.name}</span>
+                      <span style={{fontSize:8,letterSpacing:"0.14em",color:"#CB0033",textTransform:"uppercase",padding:"2px 7px",background:"#FFF5F7",border:"1px solid #F2D0D8",borderRadius:2}}>{t.style}</span>
+                    </div>
+                    <div style={{fontSize:10,color:"#A08070",fontWeight:500}}>{t.role}</div>
+                    {t.weights&&<div style={{fontSize:9,color:"#C4B0A0",fontFamily:"'DM Mono',monospace",marginTop:2}}>Weights: {t.weights}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Logo */}
+            {b.logoUrl&&(
+              <div style={{background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:6,padding:20,boxShadow:"0 2px 8px rgba(42,26,16,0.03)"}}>
+                <div style={{fontSize:8,fontWeight:700,letterSpacing:"0.26em",color:"#A08070",textTransform:"uppercase",marginBottom:14,paddingBottom:8,borderBottom:"1px solid #F4F0EC"}}>Logo</div>
+                <div style={{display:"flex",alignItems:"center",gap:14}}>
+                  <div style={{width:68,height:68,borderRadius:6,border:"1.5px solid #E8DDD5",display:"flex",alignItems:"center",justifyContent:"center",background:"#FFF",overflow:"hidden"}}>
+                    <img src={b.logoUrl} alt="Logo" style={{width:"100%",height:"100%",objectFit:"contain"}} onError={e=>e.target.style.display="none"}/>
+                  </div>
+                  <a href={b.logoUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:11,color:"#CB0033",wordBreak:"break-all"}}>{b.logoUrl}</a>
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Delete confirm */}
+          {bmDelConfirm&&(
+            <div style={{position:"fixed",inset:0,background:"rgba(42,26,16,0.5)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+              <div style={{background:"#FFF",border:"1.5px solid #E8DDD5",borderRadius:6,padding:28,maxWidth:380,width:"100%",boxShadow:"0 20px 60px rgba(42,26,16,0.2)"}}>
+                <div style={{fontFamily:"'Playfair Display',serif",fontSize:19,color:"#2A1A10",marginBottom:9}}>Delete Brand?</div>
+                <div style={{fontSize:13,color:"#6B4A38",lineHeight:1.6,marginBottom:22}}>This will permanently remove <strong>{savedBrands.find(b=>b.id===bmDelConfirm)?.name}</strong> and all its identity data.</div>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <button className="btn-s-sm" onClick={()=>setBmDel(null)}>Cancel</button>
+                  <button style={{padding:"8px 16px",border:"1.5px solid #F2D0D8",background:"#FFF5F7",color:"#CB0033",fontFamily:"'DM Sans',sans-serif",fontSize:10,fontWeight:500,letterSpacing:"0.12em",textTransform:"uppercase",cursor:"pointer",borderRadius:3}} onClick={()=>bmDelete(bmDelConfirm)}>Delete Brand</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if((bmView==="edit"||bmView==="new")&&bmEdit) {
+      const b=bmEdit; const isNew=bmView==="new";
+      return (
+        <div key="bm-edit">
+          <button className="back-link" onClick={()=>setBmView(isNew?"list":"detail")}>← {isNew?"All Brands":"Back to Brand"}</button>
+          <div style={{maxWidth:680}}>
+            {/* Basic */}
+            <div className="bm-sec">
+              <div className="bm-sec-label">Brand Identity</div>
+              <div className="fgrid">
+                <div className="fg"><label className="fl">Brand Name *</label><input className="fi" placeholder="e.g. Quencha" value={b.name} onChange={e=>bmSetField("name",e.target.value)}/></div>
+                <div className="fg"><label className="fl">Logo Text (initials)</label><input className="fi" placeholder="e.g. Q" maxLength={3} value={b.logoText} onChange={e=>bmSetField("logoText",e.target.value)}/></div>
+              </div>
+              <div className="fg"><label className="fl">Tagline</label><input className="fi" placeholder="e.g. Hydration for the On-the-Go Lifestyle" value={b.tagline} onChange={e=>bmSetField("tagline",e.target.value)}/></div>
+              <div className="fg"><label className="fl">Brand Voice / Personality</label><input className="fi" placeholder="e.g. Fresh, energetic, lifestyle-driven." value={b.brandVoice} onChange={e=>bmSetField("brandVoice",e.target.value)}/></div>
+              <div className="fg"><label className="fl">Logo URL</label><input className="fi" placeholder="e.g. https://drive.google.com/..." value={b.logoUrl} onChange={e=>bmSetField("logoUrl",e.target.value)}/></div>
+              {b.logoUrl&&<div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:"#FAF7F4",borderRadius:4,border:"1px solid #E8DDD5",marginTop:-6}}>
+                <div style={{width:60,height:60,borderRadius:4,border:"1.5px solid #E8DDD5",display:"flex",alignItems:"center",justifyContent:"center",background:"#FFF",overflow:"hidden",flexShrink:0}}>
+                  <img src={b.logoUrl} alt="Preview" style={{width:"100%",height:"100%",objectFit:"contain"}} onError={e=>e.target.style.display="none"}/>
+                </div>
+                <span style={{fontSize:11,color:"#A08070"}}>Logo preview — URL must be publicly accessible</span>
+              </div>}
+            </div>
+            {/* Colors */}
+            <div className="bm-sec">
+              <div className="bm-sec-label">Color Palette</div>
+              {(b.colors||[]).map((cl,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"11px 12px",background:"#FAF7F4",border:"1.5px solid #E8DDD5",borderRadius:4,marginBottom:7}}>
+                  <div style={{width:38,height:38,borderRadius:4,border:"1.5px solid rgba(0,0,0,0.1)",flexShrink:0,position:"relative",overflow:"hidden",cursor:"pointer"}} title="Click to pick color">
+                    <div style={{position:"absolute",inset:0,background:vhex(cl.hex)?cl.hex:"#ccc",pointerEvents:"none",borderRadius:3}}/>
+                    <input type="color" style={{position:"absolute",inset:"-4px",width:"calc(100%+8px)",height:"calc(100%+8px)",border:"none",padding:0,cursor:"pointer",opacity:0}} value={vhex(cl.hex)?cl.hex:"#888888"} onChange={e=>bmSetColor(i,"hex",e.target.value)}/>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"110px 1fr 130px",gap:7,flex:1}}>
+                    <div><label className="fl" style={{fontSize:8}}>Hex Code</label><input className="fi" style={{fontSize:12,fontFamily:"'DM Mono',monospace"}} placeholder="#CB0033" value={cl.hex} onChange={e=>bmSetColor(i,"hex",e.target.value)}/></div>
+                    <div><label className="fl" style={{fontSize:8}}>Color Name</label><input className="fi" style={{fontSize:12}} placeholder="e.g. Pantone 1935 C" value={cl.name} onChange={e=>bmSetColor(i,"name",e.target.value)}/></div>
+                    <div><label className="fl" style={{fontSize:8}}>Role</label><select className="fsel" style={{fontSize:12}} value={cl.role} onChange={e=>bmSetColor(i,"role",e.target.value)}>{COLOR_ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
+                  </div>
+                  <button className="icon-btn" onClick={()=>bmRemoveColor(i)}>×</button>
+                </div>
+              ))}
+              <button className="add-row-btn" onClick={bmAddColor}>+ Add Color</button>
+            </div>
+            {/* Typography */}
+            <div className="bm-sec">
+              <div className="bm-sec-label">Typography</div>
+              {(b.typography||[]).map((t,i)=>(
+                <div key={i} style={{padding:12,background:"#FAF7F4",border:"1.5px solid #E8DDD5",borderRadius:4,marginBottom:7}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:7}}>
+                    <div><label className="fl" style={{fontSize:8}}>Font Name</label><input className="fi" style={{fontSize:12}} placeholder="e.g. Playfair Display" value={t.name} onChange={e=>bmSetTypo(i,"name",e.target.value)}/></div>
+                    <div><label className="fl" style={{fontSize:8}}>Role</label><input className="fi" style={{fontSize:12}} placeholder="e.g. Display / Headlines" value={t.role} onChange={e=>bmSetTypo(i,"role",e.target.value)}/></div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"end"}}>
+                    <div><label className="fl" style={{fontSize:8}}>Weights</label><input className="fi" style={{fontSize:12}} placeholder="e.g. 400, 500, 600" value={t.weights} onChange={e=>bmSetTypo(i,"weights",e.target.value)}/></div>
+                    <div><label className="fl" style={{fontSize:8}}>Style</label><select className="fsel" style={{fontSize:12}} value={t.style} onChange={e=>bmSetTypo(i,"style",e.target.value)}>{FONT_STYLES.map(s=><option key={s}>{s}</option>)}</select></div>
+                    <button className="icon-btn" onClick={()=>bmRemoveTypo(i)}>×</button>
+                  </div>
+                </div>
+              ))}
+              <button className="add-row-btn" onClick={bmAddTypo}>+ Add Typeface</button>
+            </div>
+            {/* Platforms */}
+            <div className="bm-sec">
+              <div className="bm-sec-label">Launch Platforms</div>
+              <div className="ptag-row">{PLATFORMS.map(p=><button key={p} className={`ptag ${(b.platforms||[]).includes(p)?"on":""}`} onClick={()=>bmTogglePlat(p)}>{p}</button>)}</div>
+            </div>
+            {/* Live preview */}
+            <div className="bm-sec">
+              <div className="bm-sec-label">Preview</div>
+              <div style={{background:"#FAF7F4",borderRadius:6,padding:16,display:"flex",alignItems:"center",gap:16}}>
+                <LogoEl brand={b} size={56}/>
+                <div>
+                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:18,color:"#2A1A10"}}>{b.name||"Brand Name"}</div>
+                  <div style={{fontSize:11,color:"#A08070",marginTop:3}}>{b.tagline||"Brand tagline"}</div>
+                  <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap"}}>{(b.colors||[]).map((cl,i)=><div key={i} style={{width:24,height:24,borderRadius:4,background:vhex(cl.hex)?cl.hex:"#ccc",border:"1.5px solid rgba(0,0,0,0.08)"}} title={`${cl.name} ${cl.hex}`}/>)}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",height:6,borderRadius:3,overflow:"hidden",marginTop:10}}>{(b.colors||[]).map((cl,i)=><div key={i} style={{flex:1,background:vhex(cl.hex)?cl.hex:"#ccc"}}/>)}</div>
+            </div>
+            <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
+              <button className="btn-g-sm" onClick={()=>setBmView(isNew?"list":"detail")}>Cancel</button>
+              <div style={{flex:1}}/>
+              {bmSaving&&<span style={{fontSize:10,color:"#A08070",letterSpacing:"0.14em"}}>Saving…</span>}
+              <button className="btn-p-sm" onClick={bmSave} disabled={!b.name.trim()||bmSaving}>{isNew?"Create Brand":"Save Changes"}</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,images:renderImages,brands:renderBrandManager};
   const colLabel=brandInfo.collectionName?` · ${brandInfo.collectionName} Collection`:"";
 
   return (
@@ -1250,7 +1725,12 @@ export default function LaunchHub(){
             <span key={i} className="topbar-tag">{n}</span>
           ))}
         </div>
-        <div className="topbar-right"><button className="reset-btn" onClick={reset}>← New Launch</button></div>
+        <div className="topbar-right" style={{display:"flex",alignItems:"center",gap:10}}>
+          {syncStatus==="saving"&&<span style={{fontSize:9,letterSpacing:"0.16em",color:"#A08070",textTransform:"uppercase"}}>Syncing…</span>}
+          {syncStatus==="saved"&&<span style={{fontSize:9,letterSpacing:"0.16em",color:"#A47860",textTransform:"uppercase",padding:"3px 9px",background:"#FFF8F5",border:"1px solid #E8C8A0",borderRadius:2}}>✓ Saved</span>}
+          {syncStatus==="error"&&<span style={{fontSize:9,letterSpacing:"0.16em",color:"#CB0033",textTransform:"uppercase"}}>Sync failed</span>}
+          <button className="reset-btn" onClick={reset}>← New Launch</button>
+        </div>
       </div>
       <div className="rw">
         <nav className="rsb">
@@ -1274,8 +1754,10 @@ export default function LaunchHub(){
               {activeResult==="copy"     &&<><em>Platform</em> Copy</>}
               {activeResult==="calendar" &&<><em>Launch</em> Calendar</>}
               {activeResult==="images"   &&<><em>Image</em> Prompts</>}
+              {activeResult==="brands"   &&<><em>Brand</em> Identity Manager</>}
             </h2>
-            <p className="rs">{products.length} Product{products.length>1?"s":""}{colLabel} · {brandInfo.launchDate} · {brandInfo.platforms.join(" · ")}</p>
+            {activeResult!=="brands"&&<p className="rs">{products.length} Product{products.length>1?"s":""}{colLabel} · {brandInfo.launchDate} · {brandInfo.platforms.join(" · ")}</p>}
+            {activeResult==="brands"&&<p className="rs">{savedBrands.length} Brand{savedBrands.length!==1?"s":""} · Sunbeams Lifestyle — <button style={{fontSize:10,color:"#CB0033",background:"none",border:"none",cursor:"pointer",padding:0,letterSpacing:"0.1em",textTransform:"uppercase",fontFamily:"'DM Mono',monospace"}} onClick={bmOpenNew}>+ Add Brand</button></p>}
           </div>
           {renders[activeResult]?.()}
         </main>
@@ -1283,4 +1765,3 @@ export default function LaunchHub(){
     </div></>
   );
 }
-
