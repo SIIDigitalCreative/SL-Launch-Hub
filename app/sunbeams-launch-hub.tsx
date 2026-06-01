@@ -546,7 +546,7 @@ async function kvSet(key:string,value:unknown){
 }
 
 export default function LaunchHub(){
-  const [step,setStep]           = useState("form");
+  const [step,setStep]           = useState("home");
   const [activeResult,setAR]     = useState("tasks");
   const [results,setResults]     = useState({});
   const [selTeam,setSelTeam]     = useState("packaging");
@@ -560,20 +560,38 @@ export default function LaunchHub(){
   const [imgLoading,setImgLoading]= useState(false);
   const [showPresets,setShowPresets] = useState(false);
   const [kvLoaded,setKvLoaded]   = useState(false);
+  const [launches,setLaunches]   = useState<any[]>([]);
+  const [activeLaunchId,setActiveLaunchId] = useState<string|null>(null);
 
-  // Load persisted state on mount
+  // Load all saved launches on mount
   useEffect(()=>{
     (async()=>{
-      const saved = await kvGet("sl-hub-state");
-      if(saved?.results && Object.keys(saved.results).length){
-        setResults(saved.results);
-        setTaskState(saved.taskState||{});
-        setStep("results");
-        setAR("tasks");
+      const saved = await kvGet("sl-hub-launches");
+      if(saved && Array.isArray(saved) && saved.length){
+        setLaunches(saved);
       }
       setKvLoaded(true);
     })();
   },[]);
+
+  const saveLaunches = (list:any[]) => {
+    setLaunches(list);
+    kvSet("sl-hub-launches", list);
+  };
+
+  const openLaunch = (launch:any) => {
+    setResults(launch.results);
+    setTaskState(launch.taskState||{});
+    setActiveLaunchId(launch.id);
+    setStep("results");
+    setAR("tasks");
+  };
+
+  const deleteLaunch = (id:string, e:any) => {
+    e.stopPropagation();
+    if(!confirm("Delete this launch?")) return;
+    saveLaunches(launches.filter(l=>l.id!==id));
+  };
 
   const [brandInfo,setBrandInfo] = useState({
     brandName:"Sunbeams Lifestyle", collectionName:"",
@@ -616,7 +634,19 @@ export default function LaunchHub(){
         items.forEach((_,i)=>{ts[`${team}-${i}`]=false;});
       });
       setTaskState(ts);
-      kvSet("sl-hub-state",{results:plan,taskState:ts});
+      const launchId = `launch-${Date.now()}`;
+      setActiveLaunchId(launchId);
+      const newLaunch = {
+        id: launchId,
+        label: `${brandInfo.collectionName||brandInfo.brandName}`,
+        brandName: brandInfo.brandName,
+        launchDate: brandInfo.launchDate,
+        productCount: products.length,
+        createdAt: new Date().toISOString(),
+        results: plan,
+        taskState: ts,
+      };
+      saveLaunches([...launches, newLaunch]);
       const firstPlatKey=Object.keys(plan.copy)[0];
       if(firstPlatKey) setSelPlat(firstPlatKey);
       setStep("results");
@@ -627,14 +657,17 @@ export default function LaunchHub(){
   const toggleTask=key=>{
     setTaskState(s=>{
       const next={...s,[key]:!s[key]};
-      kvSet("sl-hub-state",{results,taskState:next});
+      if(activeLaunchId){
+        const updated=launches.map(l=>l.id===activeLaunchId?{...l,taskState:next}:l);
+        saveLaunches(updated);
+      }
       return next;
     });
   };
   const reset=()=>{
-    setStep("form");setResults({});setErrors({});setTaskState({});
+    setStep("home");setResults({});setErrors({});setTaskState({});
     setImgPrompts({});setProducts([EMPTY_PRODUCT()]);setShowPresets(false);
-    kvSet("sl-hub-state",{results:{},taskState:{}});
+    setActiveLaunchId(null);
   };
 
   const taskProg=team=>{
@@ -1019,6 +1052,85 @@ export default function LaunchHub(){
       .topbar-tag{display:none;}
     }
   `;
+
+  // ── HOME DASHBOARD ────────────────────────────────────────────────────────
+  if(step==="home") return (
+    <><style>{css}</style>
+    <div className="app">
+      <div className="topbar">
+        <div className="topbar-brand">
+          <div className="topbar-accent"/>
+          <div><div className="brand">Sunbeams Lifestyle</div><div className="brand-sub">Product Launch Hub</div></div>
+        </div>
+        <div className="topbar-mid">
+          <span className="topbar-tag">All Channels</span>
+          <span className="topbar-tag">2–4 Week Sprint</span>
+        </div>
+        <button className="new-launch-btn" onClick={()=>setStep("home")}>← ALL LAUNCHES</button>
+      </div>
+      <div className="fw" style={{maxWidth:900,margin:"0 auto",padding:"48px 24px"}}>
+        <div style={{marginBottom:36}}>
+          <div style={{fontFamily:"'Playfair Display',serif",fontSize:32,fontWeight:500,color:B.text,marginBottom:8}}>
+            <em style={{color:B.primary,fontStyle:"italic"}}>All</em> Launches
+          </div>
+          <div style={{color:B.muted,fontSize:14}}>Select a launch to view its checklists, briefs, copy and calendar.</div>
+        </div>
+
+        {!kvLoaded && (
+          <div style={{color:B.muted,fontSize:14,padding:"40px 0"}}>Loading launches…</div>
+        )}
+
+        {kvLoaded && launches.length===0 && (
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:12,padding:48,textAlign:"center"}}>
+            <div style={{fontSize:32,marginBottom:16}}>◈</div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,color:B.text,marginBottom:8}}>No launches yet</div>
+            <div style={{color:B.muted,fontSize:14,marginBottom:24}}>Generate your first launch plan to get started.</div>
+            <button onClick={()=>setStep("form")} style={{background:B.primary,color:"#fff",border:"none",borderRadius:8,padding:"12px 28px",fontSize:13,fontWeight:500,letterSpacing:"0.08em",cursor:"pointer",textTransform:"uppercase"}}>
+              + New Launch
+            </button>
+          </div>
+        )}
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
+          {launches.map(launch=>{
+            const teams=Object.keys(launch.results?.tasks||{});
+            const total=teams.reduce((a,t)=>a+(launch.results.tasks[t]?.length||0),0);
+            const done=teams.reduce((a,t)=>a+(launch.results.tasks[t]?.filter((_:any,i:number)=>launch.taskState?.[`${t}-${i}`]).length||0),0);
+            const pct=total?Math.round(done/total*100):0;
+            return (
+              <div key={launch.id} onClick={()=>openLaunch(launch)} style={{background:B.surface,border:`1.5px solid ${B.border}`,borderRadius:12,padding:24,cursor:"pointer",transition:"border-color 0.15s",position:"relative"}}
+                onMouseEnter={e=>(e.currentTarget.style.borderColor=B.primary)}
+                onMouseLeave={e=>(e.currentTarget.style.borderColor=B.border)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:500,color:B.text,flex:1,paddingRight:8}}>{launch.label}</div>
+                  <button onClick={e=>deleteLaunch(launch.id,e)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>✕</button>
+                </div>
+                <div style={{color:B.muted,fontSize:12,marginBottom:4}}>{launch.brandName}</div>
+                <div style={{color:B.muted,fontSize:12,marginBottom:16}}>{launch.productCount} product{launch.productCount>1?"s":""} · {launch.launchDate}</div>
+                <div style={{height:4,background:B.surfaceAlt,borderRadius:2,overflow:"hidden",marginBottom:8}}>
+                  <div style={{height:"100%",width:`${pct}%`,background:B.primary,borderRadius:2,transition:"width 0.3s"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+                  <span style={{color:B.muted}}>{done} of {total} tasks done</span>
+                  <span style={{color:pct===100?"#22a06b":B.primary,fontWeight:500}}>{pct}%</span>
+                </div>
+              </div>
+            );
+          })}
+
+          {kvLoaded && launches.length>0 && (
+            <div onClick={()=>setStep("form")} style={{background:"transparent",border:`1.5px dashed ${B.border}`,borderRadius:12,padding:24,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:160,transition:"border-color 0.15s"}}
+              onMouseEnter={e=>(e.currentTarget.style.borderColor=B.primary)}
+              onMouseLeave={e=>(e.currentTarget.style.borderColor=B.border)}>
+              <div style={{fontSize:24,color:B.muted,marginBottom:8}}>+</div>
+              <div style={{color:B.muted,fontSize:13}}>New Launch</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+    </>
+  );
 
   // ── FORM ──────────────────────────────────────────────────────────────────
   if(step==="form") return (
