@@ -568,8 +568,30 @@ export default function LaunchHub(){
   // Load all saved launches on mount
   useEffect(()=>{
     (async()=>{
+      let list:any[] = [];
       const saved = await kvGet("sl-hub-launches");
-      if(saved && Array.isArray(saved) && saved.length) setLaunches(saved);
+      if(saved && Array.isArray(saved) && saved.length){
+        list = saved;
+      } else {
+        // Migrate from old single-launch key
+        const old = await kvGet("sl-hub-state");
+        if(old?.results && Object.keys(old.results).length){
+          const taskTeams = Object.keys(old.results.tasks||{});
+          const migrated = {
+            id: `launch-migrated-${Date.now()}`,
+            label: "Previous Launch",
+            brandName: "Sunbeams Lifestyle",
+            launchDate: "",
+            productCount: Object.keys(old.results.inferred||{}).length || 1,
+            createdAt: new Date().toISOString(),
+            results: old.results,
+            taskState: old.taskState || {},
+          };
+          list = [migrated];
+          kvSet("sl-hub-launches", list);
+        }
+      }
+      if(list.length) setLaunches(list);
       const brands = await kvGet("sl-hub-brands");
       if(brands && Array.isArray(brands)) setSavedBrands(brands);
       setKvLoaded(true);
@@ -1832,3 +1854,4 @@ export default function LaunchHub(){
     </div></>
   );
 }
+
