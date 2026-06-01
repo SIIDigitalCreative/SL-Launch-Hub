@@ -32,7 +32,7 @@ const DEMO_PRESETS = [
   {
     label: "Quencha Drinkware Collection",
     brandInfo: {
-      brandName: "Sunbeams Lifestyle — Quencha",
+      brandName: "Quencha",
       collectionName: "Quencha Hydration",
       launchDate: new Date(Date.now() + 28*24*60*60*1000).toISOString().split("T")[0],
       platforms: ["Lazada","Shopee","TikTok Shop","Shopify","Instagram","Facebook"],
@@ -50,7 +50,7 @@ const DEMO_PRESETS = [
   {
     label: "Crysalis Bar & Glassware",
     brandInfo: {
-      brandName: "Sunbeams Lifestyle — Crysalis",
+      brandName: "Crysalis",
       collectionName: "Crysalis Bar Essentials",
       launchDate: new Date(Date.now() + 28*24*60*60*1000).toISOString().split("T")[0],
       platforms: ["Shopify","Lazada","Shopee","TikTok Shop","Instagram"],
@@ -68,7 +68,7 @@ const DEMO_PRESETS = [
   {
     label: "Primeo Home Textiles",
     brandInfo: {
-      brandName: "Sunbeams Lifestyle — Primeo",
+      brandName: "Primeo",
       collectionName: "Primeo Home Essentials",
       launchDate: new Date(Date.now() + 21*24*60*60*1000).toISOString().split("T")[0],
       platforms: ["Shopify","Instagram","Lazada","Shopee","TikTok Shop"],
@@ -620,7 +620,7 @@ export default function LaunchHub(){
   };
 
   const [brandInfo,setBrandInfo] = useState({
-    brandName:"Sunbeams Lifestyle", collectionName:"",
+    brandName:"", collectionName:"",
     launchDate:"", platforms:["Lazada","Shopee","TikTok Shop","Shopify"],
     brandColors:"", brandTypeface:"", packagingDimensions:"", logoUrl:"",
   });
@@ -1381,17 +1381,6 @@ export default function LaunchHub(){
     const mainInf=results.inferred?.[products[0]?.id]||{};
     return (
       <div>
-        <div className="inf-banner">
-          <div className="inf-label">Auto-Generated — Benefit &amp; Audience per Product</div>
-          {products.map(p=>{
-            const inf=results.inferred?.[p.id]||{};
-            return (
-              <div key={p.id} className="inf-txt" style={{marginBottom:4}}>
-                <strong style={{color:"#CB0033"}}>{p.productName}:</strong> {inf.keyBenefit} · <em style={{color:"#7A5540"}}>{inf.targetCustomer}</em>
-              </div>
-            );
-          })}
-        </div>
         <div className="ttabs">
           {TEAMS.map(t=>{
             const {pct:p}=taskProg(t.id);
@@ -1846,7 +1835,6 @@ export default function LaunchHub(){
               {activeResult==="calendar"&&<><em>Launch</em> Calendar</>}
               {activeResult==="images"&&<><em>Image</em> Prompts</>}
               {activeResult==="brands"&&<><em>Brand</em> Identity Manager</>}
-              {activeResult==="images"&&<><em>Image</em> Prompts</>}
             </h2>
             <p className="rs">{products.length} Product{products.length>1?"s":""}{colLabel} · {brandInfo.launchDate} · {brandInfo.platforms.join(" · ")}</p>
           </div>
