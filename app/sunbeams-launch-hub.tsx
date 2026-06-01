@@ -562,14 +562,16 @@ export default function LaunchHub(){
   const [kvLoaded,setKvLoaded]   = useState(false);
   const [launches,setLaunches]   = useState<any[]>([]);
   const [activeLaunchId,setActiveLaunchId] = useState<string|null>(null);
+  const [savedBrands,setSavedBrands] = useState<any[]>([]);
+  const [brandForm,setBrandForm] = useState<any|null>(null); // null=list, obj=editing
 
   // Load all saved launches on mount
   useEffect(()=>{
     (async()=>{
       const saved = await kvGet("sl-hub-launches");
-      if(saved && Array.isArray(saved) && saved.length){
-        setLaunches(saved);
-      }
+      if(saved && Array.isArray(saved) && saved.length) setLaunches(saved);
+      const brands = await kvGet("sl-hub-brands");
+      if(brands && Array.isArray(brands)) setSavedBrands(brands);
       setKvLoaded(true);
     })();
   },[]);
@@ -1341,6 +1343,7 @@ export default function LaunchHub(){
     {id:"copy",    icon:"▲",label:"Copy"},
     {id:"calendar",icon:"◈",label:"Calendar"},
     {id:"images",  icon:"✦",label:"Images"},
+    {id:"brands",  icon:"◉",label:"Brands"},
   ];
 
   const prog=allProg();
@@ -1564,7 +1567,221 @@ export default function LaunchHub(){
     );
   };
 
-  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,images:renderImages};
+  const EMPTY_BRAND = ()=>({
+    id: `brand-${Date.now()}`,
+    brandName:"", tagline:"", logoText:"", brandVoice:"", logoUrl:"",
+    colors:[
+      {hex:"#CB0033",name:"Pantone 1935 C",role:"Primary"},
+      {hex:"#A47860",name:"",role:"Secondary"},
+      {hex:"#D6D2C4",name:"",role:"Accent"},
+      {hex:"#F4F0EC",name:"",role:"White / Back"},
+    ],
+    fonts:[
+      {name:"Playfair Display",role:"Display / Headlines",weights:"400, 500, 600",style:"Serif"},
+      {name:"DM Sans",role:"Body / UI",weights:"300, 400, 500",style:"Sans-serif"},
+    ],
+    platforms:["Lazada","Shopee","TikTok Shop","Shopify"],
+  });
+
+  const saveBrands=(list:any[])=>{setSavedBrands(list);kvSet("sl-hub-brands",list);};
+
+  const renderBrands=()=>{
+    // Brand form view
+    if(brandForm!==null){
+      const bf=brandForm;
+      const setBF=(k:string,v:any)=>setBrandForm((b:any)=>({...b,[k]:v}));
+      const setColor=(i:number,k:string,v:string)=>setBrandForm((b:any)=>{const c=[...b.colors];c[i]={...c[i],[k]:v};return{...b,colors:c};});
+      const setFont=(i:number,k:string,v:string)=>setBrandForm((b:any)=>{const f=[...b.fonts];f[i]={...f[i],[k]:v};return{...b,fonts:f};});
+      const isEdit=savedBrands.some((b:any)=>b.id===bf.id);
+      return (
+        <div style={{maxWidth:640,margin:"0 auto"}}>
+          <button onClick={()=>setBrandForm(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:24,padding:0}}>← All Brands</button>
+
+          {/* Brand Identity */}
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginBottom:16}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.2em",color:B.primary,textTransform:"uppercase",marginBottom:16}}>Brand Identity</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+              <div>
+                <label style={{fontSize:11,color:B.muted,display:"block",marginBottom:4}}>Brand Name <span style={{color:B.primary}}>*</span></label>
+                <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",fontSize:13,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Quencha" value={bf.brandName} onChange={e=>setBF("brandName",e.target.value)}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:B.muted,display:"block",marginBottom:4}}>Logo Text (Initials)</label>
+                <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",fontSize:13,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Q" value={bf.logoText} onChange={e=>setBF("logoText",e.target.value)}/>
+              </div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:11,color:B.muted,display:"block",marginBottom:4}}>Tagline</label>
+              <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",fontSize:13,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Hydration for the On-the-Go Lifestyle" value={bf.tagline} onChange={e=>setBF("tagline",e.target.value)}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:11,color:B.muted,display:"block",marginBottom:4}}>Brand Voice / Personality</label>
+              <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",fontSize:13,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Fresh, energetic, lifestyle-driven" value={bf.brandVoice} onChange={e=>setBF("brandVoice",e.target.value)}/>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:B.muted,display:"block",marginBottom:4}}>Logo URL</label>
+              <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",fontSize:13,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. https://drive.google.com/..." value={bf.logoUrl} onChange={e=>setBF("logoUrl",e.target.value)}/>
+            </div>
+          </div>
+
+          {/* Color Palette */}
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginBottom:16}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.2em",color:B.primary,textTransform:"uppercase",marginBottom:16}}>Color Palette</div>
+            {bf.colors.map((c:any,i:number)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"40px 1fr 1fr 100px 28px",gap:8,alignItems:"center",marginBottom:10}}>
+                <div style={{width:36,height:36,borderRadius:4,background:c.hex,border:`1px solid ${B.border}`,cursor:"pointer",position:"relative",overflow:"hidden"}}>
+                  <input type="color" value={c.hex} onChange={e=>setColor(i,"hex",e.target.value)} style={{position:"absolute",inset:0,opacity:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Hex Code</div>
+                  <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} value={c.hex} onChange={e=>setColor(i,"hex",e.target.value)}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Color Name</div>
+                  <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Pantone 1935 C" value={c.name} onChange={e=>setColor(i,"name",e.target.value)}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Role</div>
+                  <select style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} value={c.role} onChange={e=>setColor(i,"role",e.target.value)}>
+                    {["Primary","Secondary","Accent","White / Back","Other"].map(r=><option key={r}>{r}</option>)}
+                  </select>
+                </div>
+                <button onClick={()=>setBrandForm((b:any)=>({...b,colors:b.colors.filter((_:any,j:number)=>j!==i)}))} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
+              </div>
+            ))}
+            <button onClick={()=>setBrandForm((b:any)=>({...b,colors:[...b.colors,{hex:"#CCCCCC",name:"",role:"Other"}]}))} style={{fontSize:11,color:B.primary,background:"none",border:`1px dashed ${B.border}`,borderRadius:4,padding:"6px 16px",cursor:"pointer",width:"100%",marginTop:4}}>+ Add Color</button>
+          </div>
+
+          {/* Typography */}
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginBottom:16}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.2em",color:B.primary,textTransform:"uppercase",marginBottom:16}}>Typography</div>
+            {bf.fonts.map((f:any,i:number)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 28px",gap:8,alignItems:"end",marginBottom:12}}>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Font Name</div>
+                  <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} placeholder="e.g. Playfair Display" value={f.name} onChange={e=>setFont(i,"name",e.target.value)}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Role</div>
+                  <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} placeholder="Display / Headlines" value={f.role} onChange={e=>setFont(i,"role",e.target.value)}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Weights</div>
+                  <input style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} placeholder="400, 500, 600" value={f.weights} onChange={e=>setFont(i,"weights",e.target.value)}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:B.muted,marginBottom:2}}>Style</div>
+                  <select style={{width:"100%",border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12,background:B.surface,color:B.text,outline:"none"}} value={f.style} onChange={e=>setFont(i,"style",e.target.value)}>
+                    {["Serif","Sans-serif","Monospace","Display","Script"].map(s=><option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <button onClick={()=>setBrandForm((b:any)=>({...b,fonts:b.fonts.filter((_:any,j:number)=>j!==i)}))} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:14,padding:0,marginBottom:2}}>✕</button>
+              </div>
+            ))}
+            <button onClick={()=>setBrandForm((b:any)=>({...b,fonts:[...b.fonts,{name:"",role:"",weights:"",style:"Sans-serif"}]}))} style={{fontSize:11,color:B.primary,background:"none",border:`1px dashed ${B.border}`,borderRadius:4,padding:"6px 16px",cursor:"pointer",width:"100%",marginTop:4}}>+ Add Typeface</button>
+          </div>
+
+          {/* Launch Platforms */}
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginBottom:16}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.2em",color:B.primary,textTransform:"uppercase",marginBottom:16}}>Launch Platforms</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {PLATFORMS.map(p=>(
+                <button key={p} onClick={()=>setBrandForm((b:any)=>({...b,platforms:b.platforms.includes(p)?b.platforms.filter((x:string)=>x!==p):[...b.platforms,p]}))}
+                  style={{padding:"6px 14px",fontSize:11,fontWeight:500,letterSpacing:"0.08em",textTransform:"uppercase",borderRadius:3,cursor:"pointer",border:`1.5px solid ${bf.platforms.includes(p)?B.primary:B.border}`,background:bf.platforms.includes(p)?B.primary:"transparent",color:bf.platforms.includes(p)?"#fff":B.muted,transition:"all 0.15s"}}>
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginBottom:24}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.2em",color:B.primary,textTransform:"uppercase",marginBottom:16}}>Preview</div>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:44,height:44,borderRadius:8,background:bf.colors[0]?.hex||B.primary,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:16,fontFamily:"'Playfair Display',serif"}}>
+                {bf.logoText||bf.brandName?.slice(0,2)||"SL"}
+              </div>
+              <div>
+                <div style={{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:500,color:B.text}}>{bf.brandName||"Brand Name"}</div>
+                <div style={{fontSize:11,color:B.muted,marginTop:2}}>{bf.tagline||"Brand tagline"}</div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:6,marginTop:12}}>
+              {bf.colors.map((c:any,i:number)=>(
+                <div key={i} title={c.name||c.hex} style={{width:20,height:20,borderRadius:3,background:c.hex,border:`1px solid ${B.border}`}}/>
+              ))}
+            </div>
+            {bf.platforms.length>0&&<div style={{marginTop:8,fontSize:10,color:B.muted}}>{bf.platforms.join(" · ")}</div>}
+          </div>
+
+          {/* Actions */}
+          <div style={{display:"flex",justifyContent:"space-between",paddingBottom:40}}>
+            <button onClick={()=>setBrandForm(null)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"10px 20px",fontSize:12,color:B.muted,cursor:"pointer",letterSpacing:"0.08em",textTransform:"uppercase"}}>Cancel</button>
+            <button onClick={()=>{
+              if(!bf.brandName.trim()) return;
+              const updated=isEdit?savedBrands.map((b:any)=>b.id===bf.id?bf:b):[...savedBrands,bf];
+              saveBrands(updated);
+              setBrandForm(null);
+            }} style={{background:B.primary,color:"#fff",border:"none",borderRadius:4,padding:"10px 24px",fontSize:12,fontWeight:500,letterSpacing:"0.08em",textTransform:"uppercase",cursor:"pointer"}}>
+              {isEdit?"Save Changes":"Create Brand"}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Brand list view
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+          <div style={{fontSize:11,color:B.muted,letterSpacing:"0.08em"}}>{savedBrands.length} Brand{savedBrands.length!==1?"s":""} · {results.brandInfo?.brandName||brandInfo.brandName}</div>
+          <button onClick={()=>setBrandForm(EMPTY_BRAND())} style={{background:B.primary,color:"#fff",border:"none",borderRadius:4,padding:"8px 18px",fontSize:11,fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",cursor:"pointer"}}>+ New Brand</button>
+        </div>
+        {savedBrands.length===0?(
+          <div onClick={()=>setBrandForm(EMPTY_BRAND())} style={{border:`1.5px dashed ${B.border}`,borderRadius:8,padding:40,textAlign:"center",cursor:"pointer",transition:"border-color 0.15s"}}
+            onMouseEnter={e=>(e.currentTarget.style.borderColor=B.primary)}
+            onMouseLeave={e=>(e.currentTarget.style.borderColor=B.border)}>
+            <div style={{fontSize:24,color:B.muted,marginBottom:8}}>+</div>
+            <div style={{color:B.muted,fontSize:13}}>Add New Brand</div>
+          </div>
+        ):(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}}>
+            {savedBrands.map((b:any)=>(
+              <div key={b.id} style={{background:B.surface,border:`1.5px solid ${B.border}`,borderRadius:8,padding:20,cursor:"pointer",transition:"border-color 0.15s",position:"relative"}}
+                onMouseEnter={e=>(e.currentTarget.style.borderColor=B.primary)}
+                onMouseLeave={e=>(e.currentTarget.style.borderColor=B.border)}
+                onClick={()=>setBrandForm({...b})}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                  <div style={{width:36,height:36,borderRadius:6,background:b.colors[0]?.hex||B.primary,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:13,fontFamily:"'Playfair Display',serif",flexShrink:0}}>
+                    {b.logoText||b.brandName?.slice(0,2)||"SL"}
+                  </div>
+                  <div>
+                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:500,color:B.text}}>{b.brandName}</div>
+                    <div style={{fontSize:10,color:B.muted,marginTop:1}}>{b.tagline}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:4,marginBottom:8}}>
+                  {b.colors.map((c:any,i:number)=>(
+                    <div key={i} style={{width:16,height:16,borderRadius:2,background:c.hex,border:`1px solid ${B.border}`}}/>
+                  ))}
+                </div>
+                <div style={{fontSize:10,color:B.muted}}>{b.platforms?.join(" · ")}</div>
+                <button onClick={e=>{e.stopPropagation();if(confirm("Delete brand?"))saveBrands(savedBrands.filter((x:any)=>x.id!==b.id));}} style={{position:"absolute",top:12,right:12,background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
+              </div>
+            ))}
+            <div onClick={()=>setBrandForm(EMPTY_BRAND())} style={{background:"transparent",border:`1.5px dashed ${B.border}`,borderRadius:8,padding:20,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:120,transition:"border-color 0.15s"}}
+              onMouseEnter={e=>(e.currentTarget.style.borderColor=B.primary)}
+              onMouseLeave={e=>(e.currentTarget.style.borderColor=B.border)}>
+              <div style={{fontSize:20,color:B.muted,marginBottom:6}}>+</div>
+              <div style={{color:B.muted,fontSize:11}}>New Brand</div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,images:renderImages,brands:renderBrands};
   const colLabel=brandInfo.collectionName?` · ${brandInfo.collectionName} Collection`:"";
 
   return (
@@ -1603,6 +1820,8 @@ export default function LaunchHub(){
               {activeResult==="briefs"&&<><em>Department</em> Briefs</>}
               {activeResult==="copy"&&<><em>Platform</em> Copy</>}
               {activeResult==="calendar"&&<><em>Launch</em> Calendar</>}
+              {activeResult==="images"&&<><em>Image</em> Prompts</>}
+              {activeResult==="brands"&&<><em>Brand</em> Identity Manager</>}
               {activeResult==="images"&&<><em>Image</em> Prompts</>}
             </h2>
             <p className="rs">{products.length} Product{products.length>1?"s":""}{colLabel} · {brandInfo.launchDate} · {brandInfo.platforms.join(" · ")}</p>
