@@ -534,14 +534,16 @@ const KV_URL   = "https://sincere-seahorse-140709.upstash.io";
 const KV_TOKEN = "gQAAAAAAAiWlAAIgcDFlMGJlN2M1NmRhYWM0YTNhODgzN2RmNzY4MWZjMWIyNA";
 async function kvGet(key:string){
   try{
-    const r=await fetch(`${KV_URL}/get/${key}`,{headers:{Authorization:`Bearer ${KV_TOKEN}`}});
+    const r=await fetch(`${KV_URL}/get/${encodeURIComponent(key)}`,{headers:{Authorization:`Bearer ${KV_TOKEN}`}});
     const j=await r.json();
-    return j.result ? JSON.parse(j.result) : null;
-  }catch{return null;}
+    if(!j.result) return null;
+    try{ return JSON.parse(j.result); }catch{ return j.result; }
+  }catch{ return null; }
 }
 async function kvSet(key:string,value:unknown){
   try{
-    await fetch(`${KV_URL}/set/${key}`,{method:"POST",headers:{Authorization:`Bearer ${KV_TOKEN}`,"Content-Type":"application/json"},body:JSON.stringify(JSON.stringify(value))});
+    const encoded = encodeURIComponent(JSON.stringify(value));
+    await fetch(`${KV_URL}/set/${encodeURIComponent(key)}/${encoded}`,{method:"GET",headers:{Authorization:`Bearer ${KV_TOKEN}`}});
   }catch{}
 }
 
@@ -1854,4 +1856,3 @@ export default function LaunchHub(){
     </div></>
   );
 }
-
