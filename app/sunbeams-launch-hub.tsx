@@ -1366,7 +1366,6 @@ export default function LaunchHub(){
     {id:"briefs",  icon:"⬡",label:"Briefs"},
     {id:"copy",    icon:"▲",label:"Copy"},
     {id:"calendar",icon:"◈",label:"Calendar"},
-    {id:"images",  icon:"✦",label:"Images"},
     {id:"brands",  icon:"◉",label:"Brands"},
   ];
 
@@ -1794,7 +1793,7 @@ export default function LaunchHub(){
     );
   };
 
-  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,images:renderImages,brands:renderBrands};
+  const renders={tasks:renderTasks,briefs:renderBriefs,copy:renderCopy,calendar:renderCalendar,brands:renderBrands};
   const colLabel=brandInfo.collectionName?` · ${brandInfo.collectionName} Collection`:"";
 
   return (
@@ -1833,7 +1832,6 @@ export default function LaunchHub(){
               {activeResult==="briefs"&&<><em>Department</em> Briefs</>}
               {activeResult==="copy"&&<><em>Platform</em> Copy</>}
               {activeResult==="calendar"&&<><em>Launch</em> Calendar</>}
-              {activeResult==="images"&&<><em>Image</em> Prompts</>}
               {activeResult==="brands"&&<><em>Brand</em> Identity Manager</>}
             </h2>
             <p className="rs">{products.length} Product{products.length>1?"s":""}{colLabel} · {brandInfo.launchDate} · {brandInfo.platforms.join(" · ")}</p>
